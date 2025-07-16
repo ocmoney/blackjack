@@ -42,15 +42,14 @@ fi
 # Add conda environment activation to .bashrc
 echo 'source /opt/conda/etc/profile.d/conda.sh && conda activate blackjack' >> ~/.bashrc
 
-# Create and activate conda environment
-echo "Creating conda environment..."
-ENV_NAME="blackjack"
-if ! conda env list | grep -q "^$ENV_NAME "; then
-    conda create -y -n $ENV_NAME python=3.9
-fi
+# Activate conda environment
+echo "Activating conda environment..."
+conda activate base
 
-# Activate the environment
-conda activate $ENV_NAME
+# Create and activate conda environment for your project
+echo "Creating blackjack conda environment..."
+conda create -n blackjack python=3.9 -y
+conda activate blackjack
 
 # Install requirements
 echo "Installing requirements..."

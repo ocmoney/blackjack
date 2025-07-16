@@ -4,6 +4,7 @@ import numpy as np
 import random
 from collections import defaultdict
 import time
+from tqdm import tqdm
 
 class GPUBlackjackSimulator:
     def __init__(self, batch_size=1000, device='cuda'):
@@ -223,7 +224,10 @@ class GPUBlackjackSimulator:
         cut_position = len(self.full_shoe) - 104
         max_hands_per_game = 1000
         
-        for hand_num in range(max_hands_per_game):
+        # Progress bar for hands
+        pbar = tqdm(range(max_hands_per_game), desc=f"Playing {num_games} games", unit="hands")
+        
+        for hand_num in pbar:
             # Check which games can continue
             can_play = (shoe_positions < cut_position - 20) & (bankrolls > 0)
             
@@ -345,11 +349,18 @@ class GPUBlackjackSimulator:
                     'bankroll': float(bankrolls[game_idx])
                 })
             
-            # Progress update
-            if hand_num % 100 == 0:
-                active_count = torch.sum(can_play).item()
-                avg_bankroll = torch.mean(bankrolls).item()
-                print(f"Hand {hand_num}: {active_count} active games, avg bankroll: ${avg_bankroll:.2f}")
+            # Update progress bar with real-time stats
+            active_count = torch.sum(can_play).item()
+            avg_bankroll = torch.mean(bankrolls).item()
+            pbar.set_postfix({
+                'Active': active_count,
+                'Avg Bankroll': f'${avg_bankroll:.0f}',
+                'Hands': len(all_results)
+            })
+            
+            # Stop if no games can continue
+            if not torch.any(can_play):
+                break
         
         return all_results, bankrolls.cpu().numpy()
     
@@ -366,11 +377,20 @@ class GPUBlackjackSimulator:
         all_results = []
         all_bankrolls = []
         
-        for batch_start in range(0, num_games, self.batch_size):
+        num_batches = (num_games - 1) // self.batch_size + 1
+        batch_pbar = tqdm(range(0, num_games, self.batch_size), 
+                         desc="Processing batches", 
+                         unit="batch")
+        
+        for batch_start in batch_pbar:
             batch_end = min(batch_start + self.batch_size, num_games)
             current_batch_size = batch_end - batch_start
             
-            print(f"\nBatch {batch_start//self.batch_size + 1}/{(num_games-1)//self.batch_size + 1}")
+            batch_pbar.set_postfix({
+                'Batch': f"{batch_start//self.batch_size + 1}/{num_batches}",
+                'Size': current_batch_size,
+                'Total Results': len(all_results)
+            })
             
             batch_results, batch_bankrolls = self.play_batch_parallel(current_batch_size)
             all_results.extend(batch_results)
