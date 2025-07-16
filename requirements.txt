@@ -1,3 +1,6 @@
-random
-math
-collections
+# Built-in Python modules (math, collections) don't need to be installed via pip
+# Add your actual project dependencies here, for example:
+# flask
+# requests
+# numpy
+# pandas
