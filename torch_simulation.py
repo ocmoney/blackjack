@@ -208,7 +208,7 @@ class GPUBlackjackSimulator:
         return actions
     
     def play_batch_parallel(self, num_games):
-        """Play multiple games in parallel on GPU"""
+        """Play multiple games in parallel on GPU using vectorized operations"""
         print(f"Playing {num_games} games in parallel on GPU...")
         
         # Initialize game states
@@ -234,23 +234,24 @@ class GPUBlackjackSimulator:
             if not torch.any(can_play):
                 break
             
-            # Reshuffle shoes that are too low
+            # Reshuffle shoes that are too low (vectorized)
             need_shuffle = shoe_positions >= cut_position - 20
             if torch.any(need_shuffle):
-                for i in torch.where(need_shuffle)[0]:
+                shuffle_indices = torch.where(need_shuffle)[0]
+                for i in shuffle_indices:
                     indices = torch.randperm(len(self.full_shoe), device=self.device)
                     shoes[i] = self.full_shoe[indices]
                     shoe_positions[i] = 0
                     running_counts[i] = 0
             
-            # Calculate true counts
+            # Calculate true counts (vectorized)
             cards_remaining = cut_position - shoe_positions
             decks_remaining = cards_remaining.float() / 52.0
             true_counts = torch.where(decks_remaining > 0, 
                                     running_counts.float() / decks_remaining, 
                                     torch.zeros_like(running_counts.float()))
             
-            # Get betting amounts
+            # Get betting amounts (vectorized)
             bet_amounts, num_hands = self.get_betting_amounts(true_counts)
             total_bets = bet_amounts.float() * num_hands.float()
             
@@ -260,93 +261,146 @@ class GPUBlackjackSimulator:
             if not torch.any(can_play):
                 continue
             
-            # Play hands for games that can continue
-            active_games = torch.where(can_play)[0]
+            # VECTORIZED GAME PROCESSING - Process all active games simultaneously
             
-            for game_idx in active_games:
-                game_idx = int(game_idx)
+            # Get active game indices
+            active_mask = can_play
+            active_indices = torch.where(active_mask)[0]
+            
+            if len(active_indices) == 0:
+                continue
+            
+            # Deal cards for all active games simultaneously
+            # Create batch tensors for all active games
+            batch_size = len(active_indices)
+            
+            # Get current positions for all active games
+            current_positions = shoe_positions[active_indices]
+            
+            # Check if we have enough cards
+            valid_positions = current_positions < len(self.full_shoe) - 10
+            if not torch.any(valid_positions):
+                continue
+            
+            # Filter to valid games
+            valid_indices = active_indices[valid_positions]
+            valid_positions_tensor = current_positions[valid_positions]
+            
+            if len(valid_indices) == 0:
+                continue
+            
+            # Deal cards for all valid games at once
+            # Dealer upcards
+            dealer_upcards = shoes[valid_indices, valid_positions_tensor]
+            
+            # Player cards (first two)
+            player_card1 = shoes[valid_indices, valid_positions_tensor + 1]
+            player_card2 = shoes[valid_indices, valid_positions_tensor + 2]
+            
+            # Dealer hole cards
+            dealer_holes = shoes[valid_indices, valid_positions_tensor + 3]
+            
+            # Update running counts for initial cards
+            count_changes = (self.card_values[dealer_upcards] + 
+                           self.card_values[player_card1] + 
+                           self.card_values[player_card2] + 
+                           self.card_values[dealer_holes])
+            
+            # Calculate initial hand values
+            player_cards_batch = torch.stack([player_card1, player_card2], dim=1)
+            player_values = self.calculate_hand_value(player_cards_batch)
+            
+            dealer_cards_batch = torch.stack([dealer_upcards, dealer_holes], dim=1)
+            dealer_values = self.calculate_hand_value(dealer_cards_batch)
+            
+            # Track card positions
+            card_positions = valid_positions_tensor + 4
+            
+            # Play player hands (simplified strategy - hit until 17+)
+            max_player_cards = 4
+            for card_idx in range(2, max_player_cards):
+                # Check which games need more cards
+                need_more_cards = (player_values < 17) & (card_positions < len(self.full_shoe))
                 
-                # Deal cards
-                pos = int(shoe_positions[game_idx])
-                if pos >= len(self.full_shoe) - 10:
-                    continue
+                if not torch.any(need_more_cards):
+                    break
                 
-                # Dealer upcard
-                dealer_upcard = shoes[game_idx, pos]
-                pos += 1
+                # Deal additional cards
+                new_cards = shoes[valid_indices, card_positions]
+                count_changes += torch.where(need_more_cards, self.card_values[new_cards], 0)
                 
-                # Player cards
-                player_cards = torch.full((4,), -1, dtype=torch.int32, device=self.device)
-                player_cards[0] = shoes[game_idx, pos]
-                player_cards[1] = shoes[game_idx, pos + 1]
-                pos += 2
+                # Update player hands
+                player_cards_batch = torch.cat([
+                    player_cards_batch, 
+                    new_cards.unsqueeze(1)
+                ], dim=1)
                 
-                # Dealer hole card
-                dealer_hole = shoes[game_idx, pos]
-                pos += 1
+                # Recalculate player values
+                player_values = self.calculate_hand_value(player_cards_batch)
+                card_positions += 1
+            
+            # Play dealer hands (hit until 17+)
+            max_dealer_cards = 6
+            for card_idx in range(2, max_dealer_cards):
+                # Check which games need dealer to hit
+                dealer_needs_hit = (dealer_values < 17) & (card_positions < len(self.full_shoe))
                 
-                # Update running count
-                count_change = (self.card_values[dealer_upcard] + 
-                              self.card_values[player_cards[0]] + 
-                              self.card_values[player_cards[1]] + 
-                              self.card_values[dealer_hole])
+                if not torch.any(dealer_needs_hit):
+                    break
                 
-                # Play player hand (simplified - just hit until 17+)
-                player_value = self.calculate_hand_value(player_cards.unsqueeze(0))[0]
-                cards_dealt = 2
+                # Deal additional cards to dealer
+                new_cards = shoes[valid_indices, card_positions]
+                count_changes += torch.where(dealer_needs_hit, self.card_values[new_cards], 0)
                 
-                while player_value < 17 and cards_dealt < 4 and pos < len(self.full_shoe):
-                    player_cards[cards_dealt] = shoes[game_idx, pos]
-                    count_change += self.card_values[player_cards[cards_dealt]]
-                    pos += 1
-                    cards_dealt += 1
-                    player_value = self.calculate_hand_value(player_cards.unsqueeze(0))[0]
+                # Update dealer hands
+                dealer_cards_batch = torch.cat([
+                    dealer_cards_batch, 
+                    new_cards.unsqueeze(1)
+                ], dim=1)
                 
-                # Play dealer hand
-                dealer_cards = torch.tensor([dealer_upcard, dealer_hole], device=self.device)
-                dealer_value = self.calculate_hand_value(dealer_cards.unsqueeze(0))[0]
-                
-                while dealer_value < 17 and pos < len(self.full_shoe):
-                    new_card = shoes[game_idx, pos]
-                    count_change += self.card_values[new_card]
-                    pos += 1
-                    
-                    # Add to dealer total
-                    card_val = self.bj_values[new_card]
-                    dealer_value += card_val
-                    
-                    # Handle aces
-                    if dealer_value > 21 and new_card == 12:  # Ace
-                        dealer_value -= 10
-                
-                # Determine result
-                bet = float(bet_amounts[game_idx])
-                hands = int(num_hands[game_idx])
-                
-                if player_value > 21:
-                    result = -bet * hands
-                elif dealer_value > 21:
-                    result = bet * hands
-                elif player_value > dealer_value:
-                    result = bet * hands
-                elif player_value < dealer_value:
-                    result = -bet * hands
-                else:
-                    result = 0
-                
-                # Update game state
-                shoe_positions[game_idx] = pos
-                running_counts[game_idx] += count_change
-                bankrolls[game_idx] += result
-                
-                # Store result
+                # Recalculate dealer values
+                dealer_values = self.calculate_hand_value(dealer_cards_batch)
+                card_positions += 1
+            
+            # Determine results (vectorized)
+            bet_amounts_valid = bet_amounts[valid_indices]
+            num_hands_valid = num_hands[valid_indices]
+            
+            # Calculate results
+            player_bust = player_values > 21
+            dealer_bust = dealer_values > 21
+            player_wins = (player_values > dealer_values) & ~player_bust
+            dealer_wins = (dealer_values > player_values) & ~dealer_bust
+            push = (player_values == dealer_values) & ~player_bust & ~dealer_bust
+            
+            # Calculate payouts
+            payouts = torch.zeros_like(bet_amounts_valid, dtype=torch.float32)
+            # Convert num_hands to float32 to match bet_amounts dtype
+            num_hands_float = num_hands_valid.float()
+            payouts[dealer_bust] = bet_amounts_valid[dealer_bust] * num_hands_float[dealer_bust]
+            payouts[player_wins] = bet_amounts_valid[player_wins] * num_hands_float[player_wins]
+            payouts[player_bust] = -bet_amounts_valid[player_bust] * num_hands_float[player_bust]
+            payouts[dealer_wins] = -bet_amounts_valid[dealer_wins] * num_hands_float[dealer_wins]
+            # push = 0 (already initialized)
+            
+            # Update game states
+            shoe_positions[valid_indices] = card_positions
+            running_counts[valid_indices] += count_changes
+            bankrolls[valid_indices] += payouts
+            
+            # Store results (batch operation)
+            true_counts_valid = true_counts[valid_indices]
+            bankrolls_valid = bankrolls[valid_indices]
+            
+            # Convert to Python for storage (this is the only sequential part, but much smaller)
+            for i in range(len(valid_indices)):
                 all_results.append({
-                    'game_idx': game_idx,
-                    'result': result,
-                    'true_count': float(true_counts[game_idx]),
-                    'bet_amount': bet,
-                    'num_hands': hands,
-                    'bankroll': float(bankrolls[game_idx])
+                    'game_idx': int(valid_indices[i]),
+                    'result': float(payouts[i]),
+                    'true_count': float(true_counts_valid[i]),
+                    'bet_amount': float(bet_amounts_valid[i]),
+                    'num_hands': int(num_hands_valid[i]),
+                    'bankroll': float(bankrolls_valid[i])
                 })
             
             # Update progress bar with real-time stats
