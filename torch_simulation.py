@@ -12,7 +12,7 @@ class GPUBlackjackSimulator:
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
         self.num_decks = 6
         self.min_bet = 25
-        self.initial_bankroll = 10000
+        self.initial_bankroll = 100000
         
         print(f"Using device: {self.device}")
         if self.device.type == 'cuda':
@@ -139,7 +139,8 @@ class GPUBlackjackSimulator:
     
     def get_betting_amounts(self, true_counts):
         """Calculate betting amounts and number of hands based on true count"""
-        # Betting progression based on true count
+        # Betting progression based on true count:
+        # 25 for tc<1, 100 for 2>tc>=1, 200 for 3>tc>=2, 400 for 4>tc>=3, 2 x 400 for 5>tc>=4, 2 x 500 for tc>=5
         bet_amounts = torch.where(true_counts < 1, 25,
                      torch.where(true_counts < 2, 100,
                      torch.where(true_counts < 3, 200,
@@ -220,22 +221,22 @@ class GPUBlackjackSimulator:
         # Game results
         all_results = []
         
-        # Cut card position (2 decks from end)
-        cut_position = len(self.full_shoe) - 104
-        max_hands_per_game = 1000
+        # Cut card position (1 deck from end for more hands)
+        cut_position = len(self.full_shoe) - 52
+        max_hands_per_game = 40
         
         # Progress bar for hands
         pbar = tqdm(range(max_hands_per_game), desc=f"Playing {num_games} games", unit="hands")
         
         for hand_num in pbar:
             # Check which games can continue
-            can_play = (shoe_positions < cut_position - 20) & (bankrolls > 0)
+            can_play = (shoe_positions < cut_position - 10) & (bankrolls > 0)
             
             if not torch.any(can_play):
                 break
             
             # Reshuffle shoes that are too low (vectorized)
-            need_shuffle = shoe_positions >= cut_position - 20
+            need_shuffle = shoe_positions >= cut_position - 10
             if torch.any(need_shuffle):
                 shuffle_indices = torch.where(need_shuffle)[0]
                 for i in shuffle_indices:
