@@ -499,5 +499,5 @@ if __name__ == "__main__":
     print(f"Initial bankroll: ${sim.bankroll}")
     print(f"Betting spread: TC<1: ${sim.min_bet}, TC1: $100, TC2: $200, TC3: $400, TC4: 2x$400, TC5+: 2x$500")
     
-    results = sim.run_simulation(10000)
+    results = sim.run_simulation(1000)
     sim.print_statistics()
