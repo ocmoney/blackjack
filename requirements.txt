@@ -2,7 +2,6 @@
 # Add your actual project dependencies here, for example:
 # flask
 # requests
-# numpy
+numpy
 # pandas
-cupy
 torch

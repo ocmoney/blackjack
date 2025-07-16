@@ -1,98 +1,163 @@
 #!/bin/bash
 
-set -e  # Exit immediately on error
+# Exit on error
+set -e
 
-echo "🔧 Updating package lists..."
-apt update
+echo "Starting blackjack project setup..."
 
-echo "🐍 Installing Miniconda and tmux..."
-apt install -y wget curl tmux
+# Function to check if a command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
 
-# Download and install Miniconda
-echo "📦 Installing Miniconda..."
-MINICONDA_URL="https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh"
-MINICONDA_INSTALLER="/tmp/miniconda_installer.sh"
+# Install system dependencies
+echo "Installing system dependencies..."
+apt-get update && apt-get install -y \
+    wget \
+    curl \
+    tmux \
+    git
 
-wget -O "$MINICONDA_INSTALLER" "$MINICONDA_URL"
-bash "$MINICONDA_INSTALLER" -b -p /root/miniconda3
-
-# Add conda to PATH
-echo "🛠 Adding conda to PATH..."
-echo 'export PATH="/root/miniconda3/bin:$PATH"' >> /root/.bashrc
-
-# Initialize conda for bash
-/root/miniconda3/bin/conda init bash
-
-# Source the updated bashrc to make conda available in current session
-source /root/.bashrc
-
-# ✅ Add tmux scroll config
-echo "🛠 Configuring tmux for smooth scrolling..."
-cat <<EOF > /root/.tmux.conf
-set -g mouse on
-set -g terminal-overrides 'xterm*:smcup@:rmcup@'
-EOF
-
-# ✅ Add auto-tmux to .bashrc (if not already there)
-if ! grep -q "auto_\$(date +%s%N)" /root/.bashrc; then
-    echo "🛠 Setting up auto-tmux per terminal in ~/.bashrc..."
-    cat << 'EOF' >> /root/.bashrc
-
-# Automatically create a new tmux session for each new terminal
-if command -v tmux &> /dev/null && [ -z "$TMUX" ]; then
-  SESSION_NAME="auto_$(date +%s%N)"
-  tmux new-session -s "$SESSION_NAME"
-fi
-EOF
+# Install Miniconda
+echo "Installing Miniconda..."
+if [ ! -d "/opt/conda" ]; then
+    wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O miniconda.sh
+    bash miniconda.sh -b -p /opt/conda
+    rm miniconda.sh
+else
+    echo "Miniconda already installed at /opt/conda"
 fi
 
+# Add conda to PATH for current session
+export PATH="/opt/conda/bin:$PATH"
 
-# 🔁 Reload tmux config if already inside tmux
-if [ -n "$TMUX" ]; then
-    echo "🔁 Reloading tmux config..."
-    tmux source-file /root/.tmux.conf
+# Initialize conda for current shell
+eval "$(/opt/conda/bin/conda shell.bash hook)"
+
+# Add conda to PATH permanently
+if [[ ":$PATH:" != *":/opt/conda/bin:"* ]]; then
+    echo 'export PATH="/opt/conda/bin:$PATH"' >> ~/.bashrc
 fi
 
-# ✅ Start tmux session if not already inside one
-if [ -z "$TMUX" ]; then
-    echo "🟢 Starting new tmux session..."
-    exec tmux new-session -A -s setup
+# Add conda environment activation to .bashrc
+echo 'source /opt/conda/etc/profile.d/conda.sh && conda activate blackjack' >> ~/.bashrc
+
+# Create and activate conda environment
+echo "Creating conda environment..."
+ENV_NAME="blackjack"
+if ! conda env list | grep -q "^$ENV_NAME "; then
+    conda create -y -n $ENV_NAME python=3.9
 fi
 
-# 📁 Go to project directory
-PROJECT_DIR="/root/blackjack"
-echo "📂 Changing directory to $PROJECT_DIR..."
-cd "$PROJECT_DIR"
+# Activate the environment
+conda activate $ENV_NAME
 
-# 📦 Install Python packages
-REQUIREMENTS="$PROJECT_DIR/requirements.txt"
-if [ -f "$REQUIREMENTS" ]; then
-    echo "📦 Installing Python dependencies from requirements.txt..."
+# Install requirements
+echo "Installing requirements..."
+if [ -f "requirements.txt" ]; then
     # Use conda to install packages, fallback to pip if conda doesn't have them
     while IFS= read -r package; do
         # Skip comments and empty lines
         [[ $package =~ ^[[:space:]]*# ]] && continue
         [[ -z "${package// }" ]] && continue
         
-        echo "📦 Installing $package..."
+        echo "Installing $package..."
         if conda install -y "$package" 2>/dev/null; then
             echo "✅ Installed $package via conda"
         else
-            echo "📦 Installing $package via pip..."
+            echo "Installing $package via pip..."
             pip install "$package"
         fi
-    done < "$REQUIREMENTS"
+    done < requirements.txt
 else
-    echo "ℹ️ No requirements.txt found, skipping package installation"
+    echo "Warning: requirements.txt not found"
 fi
 
-echo "✅ Setup complete. Scrolling and independent terminals are ready!"
+# Configure tmux for smooth scrolling
+echo "Configuring tmux..."
+cat > ~/.tmux.conf << EOL
+set -g mouse on
+set -g terminal-overrides 'xterm*:smcup@:rmcup@'
+EOL
 
+# Add auto-tmux to .bashrc (if not already there)
+if ! grep -q "auto_\$(date +%s%N)" ~/.bashrc; then
+    echo "Setting up auto-tmux per terminal in ~/.bashrc..."
+    cat >> ~/.bashrc << 'EOL'
 
-#run this:
+# Automatically create a new tmux session for each new terminal
+if command -v tmux &> /dev/null && [ -z "$TMUX" ]; then
+  SESSION_NAME="auto_$(date +%s%N)"
+  tmux new-session -s "$SESSION_NAME"
+fi
+EOL
+fi
 
-# Make it executable:
-# chmod +x setup.sh
+# Configure Git
+echo "Configuring Git..."
+git config --global user.name "blackjack-user"
+git config --global user.email "user@blackjack.local"
 
-# Run it:
-# ./setup.sh
+# Create .gitignore
+echo "Creating .gitignore..."
+cat > .gitignore << EOL
+# Miniconda
+miniconda/
+miniconda.sh
+/opt/conda/
+
+# Models
+models/
+*.pt
+*.pth
+*.h5
+*.ckpt
+*.bin
+*.onnx
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+*.log
+results/
+checkpoints/
+EOL
+
+# Verify the environment is working
+echo "Verifying conda environment..."
+echo "Python location: $(which python)"
+echo "Conda environment: $CONDA_DEFAULT_ENV"
+
+echo "Setup completed successfully!"
+echo "To activate the environment, run: source /opt/conda/etc/profile.d/conda.sh && conda activate $ENV_NAME"

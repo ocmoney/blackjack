@@ -6,7 +6,7 @@ from collections import defaultdict
 import time
 
 class GPUBlackjackSimulator:
-    def __init__(self, batch_size=10000, device='cuda'):
+    def __init__(self, batch_size=1000, device='cuda'):
         self.batch_size = batch_size
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
         self.num_decks = 6
